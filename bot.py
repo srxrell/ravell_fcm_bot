@@ -56,7 +56,8 @@ async def main():
     runner = web.AppRunner(app)
     await runner.setup()
     # Бот слушает порт 8081 (открой его в фаерволе для локального доступа)
-    site = web.TCPSite(runner, '0.0.0.0', 8081)
+    port = os.getenv("PORT")
+    site = web.TCPSite(runner, '0.0.0.0', port)
     
     print("🚀 Bot and HTTP Bridge started...")
     await asyncio.gather(
