@@ -21,6 +21,42 @@ ADMIN_ID = 7959943536
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+@dp.callback_query(F.data.startswith("refund_"))
+async def refund_handler(callback: CallbackQuery):
+    # Извлекаем charge_id из callback_data
+    try:
+        data_parts = callback.data.split("_")
+        if len(data_parts) < 2:
+            return await callback.answer("Ошибка в структуре кнопки")
+            
+        charge_id = data_parts[1]
+        user_id = callback.from_user.id
+        
+        logging.info(f"Attempting refund for user {user_id}, charge {charge_id}")
+        
+        # Вызываем метод возврата
+        await bot.refund_star_payment(
+            user_id=user_id, 
+            telegram_payment_charge_id=charge_id
+        )
+        
+        await callback.message.edit_text(
+            f"✅ <b>Возврат выполнен!</b>\nЗвезды за транзакцию <code>{charge_id}</code> возвращены на ваш баланс.",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logging.error(f"Refund Error: {e}")
+        # Если Telegram выдает ошибку, показываем её в алерте
+        error_msg = str(e)
+        if "CHARGE_ID_INVALID" in error_msg:
+            msg = "Ошибка: Неверный ID транзакции."
+        elif "PAYMENT_NOT_FOUND" in error_msg:
+            msg = "Ошибка: Платеж не найден."
+        else:
+            msg = f"Ошибка возврата: {error_msg}"
+            
+        await callback.answer(msg, show_alert=True)
+
 # --- 1. /start: Входная точка ---
 @dp.message(CommandStart()) # Убрал deep_link=True, чтобы ловило ВСЕ старты
 async def handler_start(message: types.Message, command: CommandObject):
@@ -132,14 +168,6 @@ async def successful_payment_handler(message: types.Message):
         except Exception as e:
             await message.answer(f"⚠️ Ошибка БД. ID: {charge_id}", reply_markup=refund_kb)
 
-@dp.callback_query(F.data.startswith("refund_"))
-async def refund_handler(callback: CallbackQuery):
-    charge_id = callback.data.split("_")[1]
-    try:
-        await bot.refund_star_payment(user_id=callback.from_user.id, telegram_payment_charge_id=charge_id)
-        await callback.message.edit_text(f"✅ Возврат выполнен!\nID: {charge_id}")
-    except Exception as e:
-        await callback.answer(f"Ошибка: {e}", show_alert=True)
 
 # --- 4. HTTP SERVER (RENDER + NOTIFY) ---
 async def handle_root(request):
