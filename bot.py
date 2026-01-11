@@ -21,7 +21,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 # ID админа (твой), чтобы только ты видел кнопку возврата при реальной покупке
 # Узнай свой ID у @userinfobot и вставь сюда
-ADMIN_ID = 123456789 
+ADMIN_ID = 7959943536 
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
