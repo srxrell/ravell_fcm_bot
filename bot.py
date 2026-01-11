@@ -142,4 +142,67 @@ async def successful_payment_handler(message: types.Message):
                 WHERE id = $2
             """, new_expiry, user_id_to_upgrade)
             await conn.close()
-         
+            
+            # Показываем кнопку возврата только админу (тебе) или всем (для тестов)
+            # Если хочешь для всех во время тестов - оставь как есть
+            # Если только для себя: if message.from_user.id == ADMIN_ID: ...
+            
+            await message.answer(
+                "🎉 <b>Premium активирован!</b>\nПерезайдите в приложение.",
+                parse_mode="HTML",
+                reply_markup=refund_kb # <-- Кнопка возврата добавлена сюда
+            )
+            logging.info(f"Payment success for user {user_id_to_upgrade}")
+            
+        except Exception as e:
+            logging.error(f"DB Error: {e}")
+            await message.answer(f"⚠️ Ошибка БД. ID платежа: {charge_id}", reply_markup=refund_kb)
+
+# --- 4. ЛОГИКА ВОЗВРАТА (REFUND) ---
+@dp.callback_query(F.data.startswith("refund_"))
+async def refund_handler(callback: CallbackQuery):
+    charge_id = callback.data.split("_")[1]
+    
+    try:
+        await bot.refund_star_payment(
+            user_id=callback.from_user.id, 
+            telegram_payment_charge_id=charge_id
+        )
+        await callback.message.edit_text(
+            f"✅ <b>Возврат выполнен!</b>\nСредства за транзакцию <code>{charge_id}</code> возвращены.",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        await callback.answer(f"Ошибка возврата: {e}", show_alert=True)
+
+# --- 5. HTTP BRIDGE ---
+async def handle_http_notify(request):
+    try:
+        data = await request.json()
+        chat_id = data.get("chat_id")
+        text = data.get("text")
+        if chat_id and text:
+            await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+            return web.Response(text="OK", status=200)
+        return web.Response(status=400)
+    except:
+        return web.Response(status=500)
+
+async def main():
+    app = web.Application()
+    app.router.add_post('/internal/send-notification', handle_http_notify)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    port = int(os.getenv("PORT", 8081))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    
+    print("🚀 Bot started...")
+    await asyncio.gather(dp.start_polling(bot), site.start())
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logging.info("Bot stopped")
