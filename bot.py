@@ -1,201 +1,84 @@
 import os
 import asyncio
 import logging
-from datetime import datetime, timedelta
-import asyncpg
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import CommandStart, Command, CommandObject
-from aiogram.types import LabeledPrice, PreCheckoutQuery, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram import Bot, Dispatcher, types
 from aiohttp import web
-import aiohttp
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # --- КОНФИГ ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-GO_BACKEND_URL = "https://ravell-backend-1.onrender.com/api/v1/tg-bind"
-DATABASE_URL = os.getenv("DATABASE_URL") 
-ADMIN_ID = 7959943536 
+# Порт для Render или другого хостинга
+PORT = int(os.getenv("PORT", 8081))
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-@dp.callback_query(F.data.startswith("refund_"))
-async def refund_handler(callback: CallbackQuery):
-    # Извлекаем charge_id из callback_data
-    try:
-        data_parts = callback.data.split("_")
-        if len(data_parts) < 2:
-            return await callback.answer("Ошибка в структуре кнопки")
-            
-        charge_id = data_parts[1]
-        user_id = callback.from_user.id
-        
-        logging.info(f"Attempting refund for user {user_id}, charge {charge_id}")
-        
-        # Вызываем метод возврата
-        await bot.refund_star_payment(
-            user_id=user_id, 
-            telegram_payment_charge_id=charge_id
-        )
-        
-        await callback.message.edit_text(
-            f"✅ <b>Возврат выполнен!</b>\nЗвезды за транзакцию <code>{charge_id}</code> возвращены на ваш баланс.",
-            parse_mode="HTML"
-        )
-    except Exception as e:
-        logging.error(f"Refund Error: {e}")
-        # Если Telegram выдает ошибку, показываем её в алерте
-        error_msg = str(e)
-        if "CHARGE_ID_INVALID" in error_msg:
-            msg = "Ошибка: Неверный ID транзакции."
-        elif "PAYMENT_NOT_FOUND" in error_msg:
-            msg = "Ошибка: Платеж не найден."
-        else:
-            msg = f"Ошибка возврата: {error_msg}"
-            
-        await callback.answer(msg, show_alert=True)
+# --- HTTP ОБРАБОТЧИКИ ---
 
-# --- 1. /start: Входная точка ---
-@dp.message(CommandStart()) # Убрал deep_link=True, чтобы ловило ВСЕ старты
-async def handler_start(message: types.Message, command: CommandObject):
-    args = command.args
-    
-    # Если параметров нет - просто приветствие
-    if not args:
-        return await message.answer(
-            "👋 <b>Добро пожаловать в Ravell!</b>\n\n"
-            "Используйте приложение для привязки аккаунта или команды:\n"
-            "/pay 10 — тест оплаты\n"
-            "/status — проверить подписку",
-            parse_mode="HTML"
-        )
-
-    # === BIND (ПРИВЯЗКА) ===
-    if args.startswith("bind_"):
-        user_id = args.replace("bind_", "")
-        chat_id = message.chat.id
-        
-        async with aiohttp.ClientSession() as session:
-            try:
-                payload = {"user_id": int(user_id), "chat_id": chat_id}
-                async with session.post(GO_BACKEND_URL, json=payload) as resp:
-                    if resp.status == 200:
-                        await message.answer("✅ <b>Ravell Connected!</b>", parse_mode="HTML")
-                        try:
-                            conn = await asyncpg.connect(DATABASE_URL)
-                            await conn.execute("UPDATE users SET tg_chat_id = $1 WHERE id = $2", chat_id, int(user_id))
-                            await conn.close()
-                        except: pass
-                    else:
-                        await message.answer("❌ Ошибка API привязки.")
-            except:
-                await message.answer("❌ Сервер бэкенда недоступен.")
-
-    # === SUB (ОПЛАТА ПОДПИСКИ) ===
-    elif args.startswith("sub_"):
-        parts = args.split("_")
-        if len(parts) >= 3:
-            target_user_id = parts[2]
-            await bot.send_invoice(
-                chat_id=message.chat.id,
-                title="Ravell Premium",
-                description="Активация Premium на 30 дней.\n⭐️ 20 историй в день\n⭐️ GIF-аватарка",
-                payload=f"pro_{target_user_id}",
-                currency="XTR",
-                prices=[LabeledPrice(label="Premium 1 Month", amount=100)],
-                provider_token="" 
-            )
-
-# --- 2. КОМАНДЫ ---
-@dp.message(Command("pay"))
-async def cmd_pay(message: types.Message, command: CommandObject):
-    amount = 10
-    if command.args and command.args.isdigit():
-        amount = int(command.args)
-    
-    await bot.send_invoice(
-        chat_id=message.chat.id,
-        title="Тестовый платёж",
-        description=f"Проверка оплаты Stars на {amount}",
-        payload=f"test_{message.from_user.id}",
-        currency="XTR",
-        prices=[LabeledPrice(label="Тест", amount=amount)],
-        provider_token=""
-    )
-
-@dp.message(Command("status"))
-async def cmd_status(message: types.Message):
-    try:
-        conn = await asyncpg.connect(DATABASE_URL)
-        row = await conn.fetchrow("SELECT premium_until FROM users WHERE tg_chat_id = $1", message.chat.id)
-        await conn.close()
-        if row and row['premium_until']:
-            await message.answer(f"📅 Ваш Premium до: {row['premium_until']}")
-        else:
-            await message.answer("У вас нет Premium статуса.")
-    except Exception as e:
-        await message.answer(f"Ошибка БД: {e}")
-
-# --- 3. ПЛАТЕЖИ И REFUND ---
-@dp.pre_checkout_query()
-async def pre_checkout_handler(query: PreCheckoutQuery):
-    await bot.answer_pre_checkout_query(query.id, ok=True)
-
-@dp.message(F.successful_payment)
-async def successful_payment_handler(message: types.Message):
-    payment = message.successful_payment
-    charge_id = payment.telegram_payment_charge_id
-    payload = payment.invoice_payload
-    
-    refund_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💸 Refund", callback_data=f"refund_{charge_id}")]
-    ])
-
-    if payload.startswith("test_"):
-        await message.answer(f"✅ Тест пройден!\nID: {charge_id}", reply_markup=refund_kb)
-        return
-
-    if payload.startswith("pro_"):
-        user_id = int(payload.replace("pro_", ""))
-        new_expiry = datetime.now() + timedelta(days=30)
-        try:
-            conn = await asyncpg.connect(DATABASE_URL)
-            await conn.execute("UPDATE users SET premium_until = $1 WHERE id = $2", new_expiry, user_id)
-            await conn.close()
-            await message.answer("🎉 Premium активирован!", reply_markup=refund_kb)
-        except Exception as e:
-            await message.answer(f"⚠️ Ошибка БД. ID: {charge_id}", reply_markup=refund_kb)
-
-
-# --- 4. HTTP SERVER (RENDER + NOTIFY) ---
 async def handle_root(request):
-    return web.Response(text="Ravell Bot is Running", status=200)
+    """Проверка работоспособности (Health Check)"""
+    return web.Response(text="Ravell Notification Service is Running", status=200)
 
 async def handle_http_notify(request):
+    """
+    Принимает POST запрос с JSON:
+    {
+        "chat_id": 12345678,
+        "text": "Ваше сообщение"
+    }
+    """
     try:
         data = await request.json()
-        await bot.send_message(chat_id=data.get("chat_id"), text=data.get("text"), parse_mode="HTML")
-        return web.Response(text="OK", status=200)
-    except: return web.Response(status=500)
+        chat_id = data.get("chat_id")
+        text = data.get("text")
+
+        if not chat_id or not text:
+            return web.json_response({"error": "Missing chat_id or text"}, status=400)
+
+        await bot.send_message(
+            chat_id=chat_id, 
+            text=text, 
+            parse_mode="HTML"
+        )
+        logging.info(f"Notification sent to {chat_id}")
+        return web.json_response({"status": "ok"})
+    
+    except Exception as e:
+        logging.error(f"Error sending notification: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+# --- ЗАПУСК ---
 
 async def main():
-    # Удаляем вебхук при старте, чтобы не было конфликтов
+    # Удаляем вебхук, так как используем polling (или просто запускаем сервер)
     await bot.delete_webhook(drop_pending_updates=True)
     
+    # Настройка aiohttp сервера
     app = web.Application()
     app.router.add_get('/', handle_root)
     app.router.add_post('/internal/send-notification', handle_http_notify)
     
     runner = web.AppRunner(app)
     await runner.setup()
-    port = int(os.getenv("PORT", 8081))
-    site = web.TCPSite(runner, '0.0.0.0', port)
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
     
-    logging.info("🚀 Starting Bot & HTTP Server...")
-    await asyncio.gather(dp.start_polling(bot), site.start())
+    logging.info(f"🚀 Notification Server started on port {PORT}...")
+    
+    # Запускаем одновременно и сервер, и поллинг (если нужно обрабатывать команды в будущем)
+    # Если команды вообще не нужны, можно оставить только site.start() и бесконечный цикл
+    await asyncio.gather(
+        dp.start_polling(bot), 
+        site.start()
+    )
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    asyncio.run(main())
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s"
+    )
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logging.info("Bot stopped")
