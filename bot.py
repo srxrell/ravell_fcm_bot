@@ -11,74 +11,45 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 # Порт для Render или другого хостинга
 PORT = int(os.getenv("PORT", 8081))
+CHANNEL_ID = -1003433963320
+CHANNEL_URL = "https://t.me/vorneblablabla"
 
-bot = Bot(token=BOT_TOKEN)
+logging.basicConfig(level=logging.INFO)
+bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# --- HTTP ОБРАБОТЧИКИ ---
-
-async def handle_root(request):
-    """Проверка работоспособности (Health Check)"""
-    return web.Response(text="Ravell Notification Service is Running", status=200)
-
-async def handle_http_notify(request):
-    """
-    Принимает POST запрос с JSON:
-    {
-        "chat_id": 12345678,
-        "text": "Ваше сообщение"
-    }
-    """
+async def is_subscribed(user_id: int):
     try:
-        data = await request.json()
-        chat_id = data.get("chat_id")
-        text = data.get("text")
+        member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
+        return member.status in ["member", "administrator", "creator"]
+    except Exception:
+        return False
 
-        if not chat_id or not text:
-            return web.json_response({"error": "Missing chat_id or text"}, status=400)
-
-        await bot.send_message(
-            chat_id=chat_id, 
-            text=text, 
-            parse_mode="HTML"
+@dp.message(Command("start"))
+async def start(message: types.Message):
+    if await is_subscribed(message.from_user.id):
+        await message.answer(f"✅ Ты уже с нами! Переходи в канал: {CHANNEL_URL}")
+    else:
+        builder = InlineKeyboardBuilder()
+        builder.row(types.InlineKeyboardButton(text="📢 Подписаться на канал", url=CHANNEL_URL))
+        builder.row(types.InlineKeyboardButton(text="🔄 Проверить подписку", callback_data="check"))
+        
+        await message.answer(
+            "👋 Привет! Чтобы получить доступ к программе, подпишись на мой канал. Apk приложения находится там!"
+            "Релиз и все новости будут только там!",
+            reply_markup=builder.as_markup()
         )
-        logging.info(f"Notification sent to {chat_id}")
-        return web.json_response({"status": "ok"})
-    
-    except Exception as e:
-        logging.error(f"Error sending notification: {e}")
-        return web.json_response({"error": str(e)}, status=500)
 
-# --- ЗАПУСК ---
+@dp.callback_query(F.data == "check")
+async def check_callback(callback: types.CallbackQuery):
+    if await is_subscribed(callback.from_user.id):
+        await callback.message.edit_text(f"🚀 Красава! Твой доступ открыт. Переходи: {CHANNEL_URL}")
+    else:
+        await callback.answer("❌ Сначала подпишись на канал!", show_alert=True)
 
 async def main():
-    # Удаляем вебхук, так как используем polling (или просто запускаем сервер)
     await bot.delete_webhook(drop_pending_updates=True)
-    
-    # Настройка aiohttp сервера
-    app = web.Application()
-    app.router.add_get('/', handle_root)
-    app.router.add_post('/internal/send-notification', handle_http_notify)
-    
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', PORT)
-    
-    logging.info(f"🚀 Notification Server started on port {PORT}...")
-    
-    # Запускаем одновременно и сервер, и поллинг (если нужно обрабатывать команды в будущем)
-    # Если команды вообще не нужны, можно оставить только site.start() и бесконечный цикл
-    await asyncio.gather(
-        dp.start_polling(bot), 
-        site.start()
-    )
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s"
-    )
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logging.info("Bot stopped")
+    asyncio.run(main())
