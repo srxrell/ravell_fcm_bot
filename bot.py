@@ -164,5 +164,21 @@ async def main():
     logging.info("🤖 Бот запущен!")
     await dp.start_polling(bot)
 
+# --- ДЛЯ RENDER (Web Service) ---
+async def health_check(request):
+    return web.Response(text="Bot is running!")
+
+async def run_bot():
+    await bot.delete_webhook(drop_pending_updates=True)
+    asyncio.create_task(dp.start_polling(bot))
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    if os.getenv("RENDER"):
+        # Режим для Render Web Service
+        app = web.Application()
+        app.router.add_get("/", health_check)
+        app.on_startup.append(lambda app: run_bot())
+        web.run_app(app, host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
+    else:
+        # Локальный режим
+        asyncio.run(main())
