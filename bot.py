@@ -4,6 +4,8 @@ import logging
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiohttp import web
+
 from dotenv import load_dotenv
 
 load_dotenv()
