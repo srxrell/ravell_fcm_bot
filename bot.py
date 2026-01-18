@@ -58,6 +58,7 @@ async def donate_menu(event: types.Message | types.CallbackQuery):
         "💖 Поддержи проект донатом!\n\n"
         "Напиши любое количество звезд, которое хочешь задонатить:\n"
         "Например: `50` или `100`\n\n"
+        "Все средства идут на развитие бота и канала 🚀"
     )
     
     if isinstance(event, types.Message):
@@ -67,81 +68,7 @@ async def donate_menu(event: types.Message | types.CallbackQuery):
         await event.answer()
 
 # --- ОБРАБОТКА СУММЫ ДОНАТА ---
-@dp.message(F.text.regexp(r'^\d+
-
-# --- ПРЕДЧЕК ПЛАТЕЖА ---
-@dp.pre_checkout_query()
-async def pre_checkout(pre_checkout_query: types.PreCheckoutQuery):
-    await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
-
-# --- УСПЕШНЫЙ ПЛАТЕЖ ---
-@dp.message(F.successful_payment)
-async def successful_payment(message: types.Message):
-    payment = message.successful_payment
-    transaction_id = payment.telegram_payment_charge_id
-    amount = payment.total_amount
-    
-    logging.info(
-        f"💰 Payment: user={message.from_user.id}, "
-        f"transaction={transaction_id}, amount={amount}"
-    )
-    
-    await message.answer(
-        f"✅ Спасибо за поддержку!\n\n"
-        f"💎 Получено: {amount} ⭐\n"
-        f"🔖 ID транзакции:\n`{transaction_id}`\n\n"
-        f"Если нужен возврат, используй:\n"
-        f"/refund `{transaction_id}`",
-        parse_mode="Markdown"
-    )
-
-# --- ВОЗВРАТ ЗВЕЗД ---
-@dp.message(Command("refund"))
-async def refund_stars(message: types.Message):
-    args = message.text.split(maxsplit=1)
-    
-    if len(args) < 2:
-        await message.answer(
-            "❌ Укажи ID транзакции!\n\n"
-            "Пример:\n"
-            "/refund ABC123XYZ\n\n"
-            "ID можно найти в сообщении после оплаты."
-        )
-        return
-    
-    transaction_id = args[1].strip().replace("`", "")
-    
-    try:
-        await bot.refund_star_payment(
-            user_id=message.from_user.id,
-            telegram_payment_charge_id=transaction_id
-        )
-        
-        await message.answer(
-            "✅ Возврат выполнен успешно!\n"
-            f"Звезды вернулись на твой счет 💫"
-        )
-        logging.info(f"♻️ Refund: user={message.from_user.id}, transaction={transaction_id}")
-        
-    except Exception as e:
-        await message.answer(
-            "❌ Ошибка возврата!\n\n"
-            "Возможные причины:\n"
-            "• Неверный ID транзакции\n"
-            "• Возврат уже был выполнен\n"
-            "• Прошло более 90 дней\n\n"
-            f"Детали: {str(e)}"
-        )
-        logging.error(f"❌ Refund failed: {e}")
-
-# --- ЗАПУСК ---
-async def main():
-    await bot.delete_webhook(drop_pending_updates=True)
-    logging.info("🤖 Бот запущен!")
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())))
+@dp.message(F.text.regexp(r'^\d+$'))
 async def create_invoice(message: types.Message):
     try:
         amount = int(message.text)
