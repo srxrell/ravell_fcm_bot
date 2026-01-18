@@ -1,23 +1,23 @@
 import os
 import asyncio
 import logging
-from aiogram import Bot, Dispatcher, types
-from aiohttp import web
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # --- КОНФИГ ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-# Порт для Render или другого хостинга
-PORT = int(os.getenv("PORT", 8081))
 CHANNEL_ID = -1003433963320
 CHANNEL_URL = "https://t.me/vorneblablabla"
 
 logging.basicConfig(level=logging.INFO)
-bot = Bot(token=TOKEN)
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+# --- ПРОВЕРКА ПОДПИСКИ ---
 async def is_subscribed(user_id: int):
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
@@ -25,30 +25,136 @@ async def is_subscribed(user_id: int):
     except Exception:
         return False
 
+# --- START ---
 @dp.message(Command("start"))
 async def start(message: types.Message):
-    if await is_subscribed(message.from_user.id):
-        await message.answer(f"✅ Ты уже с нами! Переходи в канал: {CHANNEL_URL}")
-    else:
-        builder = InlineKeyboardBuilder()
-        builder.row(types.InlineKeyboardButton(text="📢 Подписаться на канал", url=CHANNEL_URL))
-        builder.row(types.InlineKeyboardButton(text="🔄 Проверить подписку", callback_data="check"))
-        
-        await message.answer(
-            "👋 Привет! Чтобы получить доступ к программе, подпишись на мой канал. Apk приложения находится там!"
-            "Релиз и все новости будут только там!",
-            reply_markup=builder.as_markup()
-        )
+    builder = InlineKeyboardBuilder()
+    builder.row(types.InlineKeyboardButton(text="📢 Подписаться на канал", url=CHANNEL_URL))
+    builder.row(types.InlineKeyboardButton(text="🔄 Проверить подписку", callback_data="check"))
+    builder.row(types.InlineKeyboardButton(text="⭐ Поддержать донатом", callback_data="donate"))
+   
+    await message.answer(
+        "👋 Привет! Чтобы получить доступ к программе, подпишись на мой канал.\n"
+        "Apk приложения находится там! Релиз и все новости будут только там!",
+        reply_markup=builder.as_markup()
+    )
 
+# --- ПРОВЕРКА ПОДПИСКИ ---
 @dp.callback_query(F.data == "check")
 async def check_callback(callback: types.CallbackQuery):
     if await is_subscribed(callback.from_user.id):
-        await callback.message.edit_text(f"🚀 Красава! Твой доступ открыт. Переходи: {CHANNEL_URL}")
+        await callback.message.edit_text(
+            f"🚀 Красава! Твой доступ открыт. Переходи: {CHANNEL_URL}",
+            reply_markup=None
+        )
     else:
         await callback.answer("❌ Сначала подпишись на канал!", show_alert=True)
 
+# --- ДОНАТЫ ---
+@dp.message(Command("donate"))
+@dp.callback_query(F.data == "donate")
+async def donate_menu(event: types.Message | types.CallbackQuery):
+    builder = InlineKeyboardBuilder()
+    builder.row(types.InlineKeyboardButton(text="⭐ 10 звезд", callback_data="pay_10"))
+    builder.row(types.InlineKeyboardButton(text="⭐ 50 звезд", callback_data="pay_50"))
+    builder.row(types.InlineKeyboardButton(text="⭐ 100 звезд", callback_data="pay_100"))
+    builder.row(types.InlineKeyboardButton(text="⭐ 500 звезд", callback_data="pay_500"))
+    
+    text = (
+        "💖 Поддержи проект донатом!\n\n"
+        "Выбери сумму в звездах Telegram:\n"
+    )
+    
+    if isinstance(event, types.Message):
+        await event.answer(text, reply_markup=builder.as_markup())
+    else:
+        await event.message.edit_text(text, reply_markup=builder.as_markup())
+
+# --- СОЗДАНИЕ ИНВОЙСА ---
+@dp.callback_query(F.data.startswith("pay_"))
+async def create_invoice(callback: types.CallbackQuery):
+    amount = int(callback.data.split("_")[1])
+    
+    await bot.send_invoice(
+        chat_id=callback.from_user.id,
+        title=f"Донат {amount} ⭐",
+        description=f"Поддержка проекта на {amount} звезд Telegram",
+        payload=f"donate_{amount}_{callback.from_user.id}",
+        currency="XTR",  # Telegram Stars
+        prices=[types.LabeledPrice(label=f"{amount} звезд", amount=amount)]
+    )
+    
+    await callback.answer("✅ Инвойс отправлен!")
+
+# --- ПРЕДЧЕК ПЛАТЕЖА ---
+@dp.pre_checkout_query()
+async def pre_checkout(pre_checkout_query: types.PreCheckoutQuery):
+    await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
+
+# --- УСПЕШНЫЙ ПЛАТЕЖ ---
+@dp.message(F.successful_payment)
+async def successful_payment(message: types.Message):
+    payment = message.successful_payment
+    transaction_id = payment.telegram_payment_charge_id
+    amount = payment.total_amount
+    
+    logging.info(
+        f"💰 Payment: user={message.from_user.id}, "
+        f"transaction={transaction_id}, amount={amount}"
+    )
+    
+    await message.answer(
+        f"✅ Спасибо за поддержку!\n\n"
+        f"💎 Получено: {amount} ⭐\n"
+        f"🔖 ID транзакции:\n`{transaction_id}`\n\n"
+        f"Если нужен возврат, используй:\n"
+        f"/refund `{transaction_id}`",
+        parse_mode="Markdown"
+    )
+
+# --- ВОЗВРАТ ЗВЕЗД ---
+@dp.message(Command("refund"))
+async def refund_stars(message: types.Message):
+    args = message.text.split(maxsplit=1)
+    
+    if len(args) < 2:
+        await message.answer(
+            "❌ Укажи ID транзакции!\n\n"
+            "Пример:\n"
+            "/refund ABC123XYZ\n\n"
+            "ID можно найти в сообщении после оплаты."
+        )
+        return
+    
+    transaction_id = args[1].strip().replace("`", "")
+    
+    try:
+        await bot.refund_star_payment(
+            user_id=message.from_user.id,
+            telegram_payment_charge_id=transaction_id
+        )
+        
+        await message.answer(
+            "✅ Возврат выполнен успешно!\n"
+            f"Звезды вернулись на твой счет 💫"
+        )
+        logging.info(f"♻️ Refund: user={message.from_user.id}, transaction={transaction_id}")
+        
+    except Exception as e:
+        await message.answer(
+            "❌ Ошибка возврата!\n\n"
+            "Возможные причины:\n"
+            "• Неверный ID транзакции\n"
+            "• Возврат уже был выполнен\n"
+            "• Прошло более 90 дней\n\n"
+            f"Детали: {str(e)}"
+        )
+        logging.error(f"❌ Refund failed: {e}")
+
+# --- ЗАПУСК ---
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
+    logging.info("🤖 Бот запущен!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
